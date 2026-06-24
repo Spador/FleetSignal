@@ -1,0 +1,4 @@
+# pandas and pyarrow are used only to write parquet at the bronze layer.
+# the generation logic itself stays pure stdlib Python for explainability.
+pandas
+pyarrow

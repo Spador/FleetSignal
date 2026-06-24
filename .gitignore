@@ -10,6 +10,9 @@ scenarios/
 __pycache__/
 *.pyc
 .venv/
+venv/
+.env/
+.claude
 
 # Streamlit secrets only. config.toml stays tracked.
 .streamlit/secrets.toml
