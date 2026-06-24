@@ -1,0 +1,15 @@
+# Local only. These never go to GitHub.
+spec.md
+docs/
+data/
+state/
+reports/
+scenarios/
+
+# Python junk
+__pycache__/
+*.pyc
+.venv/
+
+# Streamlit secrets only. config.toml stays tracked.
+.streamlit/secrets.toml
