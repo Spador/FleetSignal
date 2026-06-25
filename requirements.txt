@@ -2,3 +2,6 @@
 # the generation logic itself stays pure stdlib Python for explainability.
 pandas
 pyarrow
+
+# duckdb is the warehouse engine: it runs the SQL transforms on parquet, no server to host.
+duckdb
