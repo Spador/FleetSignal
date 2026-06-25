@@ -2,142 +2,133 @@
 
 ![pipeline](https://github.com/Spador/FleetSignal/actions/workflows/pipeline.yml/badge.svg)
 
-A miniature fleet telemetry pipeline that mines synthetic Self-Driving data, computes a safety metric, and surfaces interesting driving scenarios for training and evaluation.
+A small fleet telemetry pipeline. It generates synthetic Self-Driving events, moves them through a
+layered warehouse, computes a safety metric, mines interesting scenarios, and guards the whole flow
+with data quality gates and statistical anomaly detection. One command runs all of it.
 
-This is a self-contained build that mirrors the real loop a fleet data team runs: source high volume telemetry, move it through a layered pipeline, turn it into a metric that measures autonomy performance, and flag scenarios worth labeling.
-
-## Why this exists
-
-Most data projects stop at a dashboard. This one models the full data lifecycle end to end: sourcing, ingestion, transformation, analytics, scenario mining, and serving. The headline metric is miles per disengagement, the same class of number that shows up in a Vehicle Safety Report.
+The data is synthetic on purpose. The role is about building the pipeline, not finding a dataset.
+Synthetic data lets us control volume to prove scale, and inject faults to prove the failure
+detection works.
 
 ## Architecture
 
 ```
- Synthetic         Bronze            Silver             Gold              Serve
- generator   -->   raw events  -->   cleaned/deduped -->  aggregates  -->  dashboard
- (Python)          (parquet)         (SQL/dbt)          (star schema)     + scenario feed
-                                                                          + health checks
+generate.py          bronze            silver              gold             serve
+(pure Python)  -->    raw events  -->   clean, deduped  --> star schema  --> app.py dashboard
+                      parquet           one wide table      fact + dims      + scenario files
+                      by date                                                + quality report
+
+         quality gates between the stages   |   anomaly detection at the end
 ```
 
-- Bronze: raw telemetry as written, no changes
-- Silver: typed, deduped, validated
-- Gold: star schema with fact and dimension tables, ready for fast queries
+Three layers, the standard medallion pattern. Each layer has one job, so a failure is easy to
+locate. Bronze proves what arrived, silver proves what is clean, gold proves what is modeled.
 
-## Data model
+## The metric
 
-Telemetry event fields:
-
-| field | meaning |
-|---|---|
-| vehicle_id | which car |
-| ts | event timestamp |
-| speed_mph | instantaneous speed |
-| accel | longitudinal acceleration |
-| lat, lon | location |
-| autopilot_engaged | bool, autonomy active or manual |
-| disengagement | bool, autonomy handed control back |
-| hard_brake | bool, braking past a threshold |
-| weather | clear, rain, snow, fog |
-
-Gold star schema:
-
-- fact_drive_events (one row per event, foreign keys to dims)
-- dim_vehicle, dim_time, dim_weather, dim_location_bucket
-
-## The headline metric
-
-Miles per disengagement, plus interventions per 1000 miles.
+Miles per disengagement, the number a Vehicle Safety Report leads with. Plus the intervention rate
+per 1,000 autopilot miles.
 
 ```
-miles_per_disengagement = total_autopilot_miles / count(disengagements)
-intervention_rate_1k    = count(disengagements) / total_autopilot_miles * 1000
+miles_per_disengagement  = total_autopilot_miles / disengagement_count
+intervention_rate_per_1k = disengagement_count / total_autopilot_miles * 1000
 ```
 
-Sliced by:
-
-- autopilot vs manual
-- weather
-- time of day
-
-This is the number that drives decisions. One metric done deeply.
+Computed in `metrics.sql`, sliced by autopilot vs manual, weather, and time of day. Both ratios are
+defined over autopilot miles only, since a disengagement cannot happen in manual mode. One metric
+done deeply beats five done shallow.
 
 ## Scenario mining
 
-A query layer that ranks events worth pulling into a training or eval set:
+`scenarios.sql` writes three ranked candidate datasets to `scenarios/`, each framed as a handoff to
+an AI engineering partner:
 
-- disengagements clustered near the same location
-- hard braking events in rain or snow
-- high speed events with autopilot engaged in poor weather
+- disengagement clusters, the recurring trouble spots by location
+- hard brakes in rain or snow, ranked by how hard
+- high speed autopilot in poor weather, ranked by speed
 
-Output is a ranked candidate dataset, written to disk, ready to hand to an AI engineering partner.
+## Failure detection
+
+`quality.py`, two tiers, run inside the pipeline and able to halt it.
+
+- Tier 1, deterministic gates: schema, nulls, ranges, uniqueness, referential integrity. Pass or
+  stop. The Tier 1 gate sits between silver and gold, so bad data halts before it is modeled.
+- Tier 2, statistical anomaly detection against a rolling baseline: volume drop, freshness lag,
+  distribution drift, vehicle dropout. A warn stays green, a fail goes red and exits nonzero.
+
+The generator can inject four faults (`--inject-anomaly`), and each one is caught by a specific
+check. Simple statistics, not a model, because it is explainable line by line and needs no training
+data.
 
 ## Dashboard
 
-One interactive view:
-
-- map of flagged scenarios
-- safety metric trends over time, with the autopilot vs manual split
-- filters for weather and time window
-
-## Health and reliability
-
-A check job that runs after each pipeline pass:
-
-- row counts per stage, bronze to gold
-- freshness lag, how old is the newest event
-- an alert when inflow drops below an expected floor
-
-This is the monitoring and alerting story, scaled down but real.
-
-## Scale notes
-
-State the real numbers from your own run here. Example shape:
-
-- generator produces 5,000,000 events across 3,000 vehicles
-- bronze write time, silver transform time, gold build time
-- gold query latency for the metric and for scenario mining
-
-This section is the proof of "ETLs at scale" without needing a real fleet.
-
-## Stack
-
-- Python for the generator and transforms
-- DuckDB for the SQL warehouse layer
-- dbt for silver to gold, optional but signals ETL discipline
-- Streamlit for the dashboard and map
-- cron or a small Airflow DAG for orchestration
+`streamlit run app.py`. Dark theme. Three metric cards, a pydeck hotspot map of flagged scenarios,
+and a safety trend of interventions per 1k autopilot miles by hour.
 
 ## Run it
 
 ```
-python generate.py --vehicles 3000 --events 5000000
-python pipeline.py            # bronze -> silver -> gold
-python health_check.py        # counts, freshness, alert
-streamlit run app.py          # dashboard
+pip install -r requirements.txt
+
+python3 orchestrate.py --vehicles 1000 --events 1000000   # generate -> ... -> anomaly check
+streamlit run app.py                                       # the dashboard
 ```
+
+`orchestrate.py` is the one command. It runs every stage in order, times each one, retries once on
+error, and halts with a nonzero exit if a gate fails. Run it a few times to build the anomaly
+baseline, then inject a fault to watch it go red:
+
+```
+python3 orchestrate.py --inject-anomaly spike_disengagements
+```
+
+## Scale notes
+
+Real numbers from this build, on a laptop. Generation is pure standard-library Python on purpose,
+so the code reads clearly. That makes it the bottleneck. The DuckDB transform layer stays under two
+seconds even at five million events.
+
+| events | vehicles | generate | silver | gold | metrics + scenarios | total |
+|---|---|---|---|---|---|---|
+| 1,000,000 | 1,000 | 8.6s | 0.4s | 0.3s | 0.1s | 10.2s |
+| 5,000,000 | 2,000 | 64.2s | 1.1s | 0.8s | 0.2s | 67.2s |
+
+At five million events: silver and fact are 5,000,000 rows each, dim_location 21,091, dim_vehicle
+2,000, dim_time 72, dim_weather 4. The whole warehouse runs on parquet with DuckDB, no server to
+host.
+
+## Stack
+
+- Python for generation, transforms, orchestration
+- DuckDB as the warehouse, SQL on parquet with zero setup
+- Parquet for storage at each layer
+- Plain SQL files for the transforms and the metric
+- Streamlit and pydeck for the dashboard
+- GitHub Actions for scheduled automation
+- pandas and pyarrow only to write parquet at the bronze layer
 
 ## Repo layout
 
 ```
 fleetsignal/
-  generate.py
-  pipeline.py
-  health_check.py
-  app.py
-  models/            # dbt or raw SQL transforms
-  data/
-    bronze/
-    silver/
-    gold/
-  scenarios/         # ranked candidate datasets
-  README.md
+  generate.py          # synthetic events -> bronze, with --inject-anomaly
+  pipeline.py          # bronze -> silver -> gold
+  quality.py           # two-tier failure detection
+  orchestrate.py       # one command, all stages, gates wired in
+  metrics.sql          # the safety metric
+  scenarios.sql        # three ranked candidate datasets
+  app.py               # the dashboard
+  models/              # the silver and gold SQL transforms
+  tests/               # pytest over the anomaly functions
+  .github/workflows/   # the CI pipeline
+  .streamlit/          # dark theme
 ```
 
 ## What this demonstrates
 
-- Python and SQL at volume
-- full data lifecycle ownership, source to serve
-- a metric that measures Self-Driving performance, defined and built
-- scenario sourcing for training and eval
-- monitoring, alerting, and orchestration
-- interactive visualization that turns raw events into a decision
+- Python and SQL at volume, a clean star schema with documented modeling decisions
+- a safety metric that measures Self-Driving performance, defined and built
+- scenario sourcing for training and evaluation
+- two tiers of failure detection, with a demo that catches an injected fault
+- one-command orchestration and unattended CI
+- an interactive dashboard that turns raw events into a decision
