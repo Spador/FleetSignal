@@ -1,0 +1,29 @@
+name: pipeline
+
+# Proof that the pipeline runs unattended and passes its own quality checks:
+# on every push, once a day, and on demand.
+on:
+  push:
+  schedule:
+    - cron: "0 6 * * *"   # 06:00 UTC daily
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run the full pipeline at small volume
+        # A gate failure makes orchestrate.py exit nonzero, which fails this job.
+        run: python orchestrate.py --vehicles 30 --events 5000
+
+      - name: Run the tests
+        run: python -m pytest -q

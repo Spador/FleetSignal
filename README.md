@@ -1,5 +1,7 @@
 # FleetSignal
 
+![pipeline](https://github.com/Spador/FleetSignal/actions/workflows/pipeline.yml/badge.svg)
+
 A miniature fleet telemetry pipeline that mines synthetic Self-Driving data, computes a safety metric, and surfaces interesting driving scenarios for training and evaluation.
 
 This is a self-contained build that mirrors the real loop a fleet data team runs: source high volume telemetry, move it through a layered pipeline, turn it into a metric that measures autonomy performance, and flag scenarios worth labeling.

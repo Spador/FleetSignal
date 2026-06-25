@@ -105,6 +105,12 @@ def result(check, tier, status, observed=None, baseline=None, threshold=None, de
     }
 
 
+def connect():
+    con = duckdb.connect()
+    con.execute("SET TimeZone='UTC'")
+    return con
+
+
 # ---------------------------------------------------------------------------
 # Tier 1: deterministic hard gates (pass or fail)
 # ---------------------------------------------------------------------------
@@ -181,6 +187,11 @@ def referential_integrity_check(con):
     detail = ", ".join(f"{d}={n} orphans" for d, n in orphans.items()) if orphans else "all fact FKs resolve"
     return result("referential_integrity", 1, status, observed=orphans or "ok",
                   threshold="0 orphan foreign keys", detail=detail)
+
+
+def tier1_silver_checks(con):
+    """The Tier 1 gates that only need silver, so they can gate before gold is built."""
+    return [schema_check(con), null_check(con), range_check(con), uniqueness_check(con)]
 
 
 # ---------------------------------------------------------------------------
@@ -392,16 +403,9 @@ def parse_args():
 
 def main():
     args = parse_args()
-    con = duckdb.connect()
-    con.execute("SET TimeZone='UTC'")
+    con = connect()
 
-    results = [
-        schema_check(con),
-        null_check(con),
-        range_check(con),
-        uniqueness_check(con),
-        referential_integrity_check(con),
-    ]
+    results = tier1_silver_checks(con) + [referential_integrity_check(con)]
 
     summary = summarize_run(con)
     vehicles = current_vehicles(con)

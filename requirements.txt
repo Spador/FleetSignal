@@ -5,3 +5,6 @@ pyarrow
 
 # duckdb is the warehouse engine: it runs the SQL transforms on parquet, no server to host.
 duckdb
+
+# pytest runs the unit tests for the anomaly-detection functions.
+pytest
