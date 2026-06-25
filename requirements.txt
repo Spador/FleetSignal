@@ -8,3 +8,8 @@ duckdb
 
 # pytest runs the unit tests for the anomaly-detection functions.
 pytest
+
+# streamlit + pydeck are the dashboard; altair (bundled with streamlit) draws the trend.
+streamlit
+pydeck
+altair
